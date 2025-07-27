@@ -24,6 +24,7 @@
     "multer": "^2.0.2",
     "nodemon": "^3.1.10",
     "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
     "twilio": "^5.8.0"
   }
 }
