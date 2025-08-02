@@ -11,6 +11,7 @@ router.post('/checkpoint', journeyController.checkpoint);
 router.post('/emergency', journeyController.emergency);
 router.get('/:userId/current', journeyController.getCurrentJourney);
 
+router.post('/update-location', journeyController.updateCurrentLocation);
 
 
 

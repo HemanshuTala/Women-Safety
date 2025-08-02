@@ -258,3 +258,40 @@ exports.getJourneyDetails = async (req, res, next) => {
     next(err);
   }
 };
+// Update user’s current live location during the journey
+exports.updateCurrentLocation = async (req, res, next) => {
+  try {
+    const { userId, journeyId, latitude, longitude } = req.body;
+
+    if (!userId || !journeyId || !latitude || !longitude) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
+
+    if (!journey) {
+      return res.status(404).json({ message: 'Active journey not found' });
+    }
+
+    journey.lastKnownLocation = {
+      latitude,
+      longitude,
+      updatedAt: new Date(),
+    };
+
+    await journey.save();
+
+    // Optional: Emit to socket
+    req.io?.to(`parent_${userId}`).emit('location_broadcast', {
+      userId,
+      journeyId,
+      latitude,
+      longitude,
+      updatedAt: new Date(),
+    });
+
+    res.status(200).json({ message: 'Location updated successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
