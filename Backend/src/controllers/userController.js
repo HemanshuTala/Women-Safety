@@ -23,7 +23,7 @@ exports.generateCode = async (req, res, next) => {
 
     const code = generateCode();
     user.linkingCode = code;
-    user.linkingCodeExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // ⏳ 1 hour expiry
+    user.linkingCodeExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour expiry
 
     await user.save();
 
@@ -54,7 +54,7 @@ exports.linkParent = async (req, res, next) => {
     }
 
     const user = await User.findOne({
-      linkingCode: code,
+      linkingCode: { $regex: `^${code}$`, $options: 'i' }, // Case-insensitive
       linkingCodeExpiresAt: { $gt: new Date() },
       role: 'user',
     });
@@ -76,7 +76,7 @@ exports.linkParent = async (req, res, next) => {
 
     user.linkingCode = undefined;
     user.linkingCodeExpiresAt = undefined;
-    parent.usedLinkingCode = code;
+    parent.usedLinkingCode = undefined; // Clear used code
 
     await user.save();
     await parent.save();
@@ -126,7 +126,7 @@ exports.getParent = async (req, res, next) => {
 
     const parent = await User.findById(parentId)
       .select('-password')
-      .populate('relations', 'name email phone role');
+      .populate('relations', 'name _id email phone role');
 
     if (!parent) return res.status(404).json({ message: 'Parent not found' });
 
