@@ -112,3 +112,31 @@ exports.getUser = async (req, res, next) => {
     next(err);
   }
 };
+
+//
+// 4. Get Parent with Linked Users (Children)
+//
+exports.getParent = async (req, res, next) => {
+  try {
+    const { parentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(parentId)) {
+      return res.status(400).json({ message: 'Valid parentId is required' });
+    }
+
+    const parent = await User.findById(parentId)
+      .select('-password')
+      .populate('relations', 'name email phone role');
+
+    if (!parent) return res.status(404).json({ message: 'Parent not found' });
+
+    if (parent.role !== 'parent') {
+      return res.status(403).json({ message: 'Provided ID is not a parent user' });
+    }
+
+    return res.status(200).json({ parent });
+  } catch (err) {
+    console.error('[getParent] Error:', err);
+    next(err);
+  }
+};

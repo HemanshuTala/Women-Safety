@@ -5,5 +5,5 @@ const userController = require('../controllers/userController');
 router.post('/generate-code', userController.generateCode);
 router.post('/link-parent', userController.linkParent);
 router.get('/:userId', userController.getUser);
-
+router.get('/parent/:parentId', userController.getParent);
 module.exports = router;
