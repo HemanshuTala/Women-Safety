@@ -3,6 +3,8 @@ const EmergencyAction = require('../models/EmergencyAction');
 const notificationService = require('../services/notificationService');
 const twilioService = require('../services/twilioService');
 
+
+
 // Start a new journey
 exports.start = async (req, res, next) => {
   try {
@@ -14,16 +16,23 @@ exports.start = async (req, res, next) => {
       endLocation: { latitude, longitude, address }
     }
     */
-
     const { userId, startLocation, endLocation } = req.body;
 
     if (!userId || !startLocation || !endLocation) {
+      console.error('Missing required fields:', { userId, startLocation, endLocation });
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    // Validate coordinates
+    if (!startLocation.latitude || !startLocation.longitude || !endLocation.latitude || !endLocation.longitude) {
+      console.error('Invalid coordinates:', { startLocation, endLocation });
+      return res.status(400).json({ message: 'Invalid location coordinates' });
     }
 
     // Check if user already has an active journey
     const activeJourney = await Journey.findOne({ userId, status: 'active' });
     if (activeJourney) {
+      console.warn(`Active journey already exists for user ${userId}: ${activeJourney._id}`);
       return res.status(400).json({ message: 'There is already an active journey for this user' });
     }
 
@@ -34,6 +43,7 @@ exports.start = async (req, res, next) => {
       startedAt: new Date(),
       status: 'active',
       checkpoints: [],
+      distanceTraveled: 0,
       lastKnownLocation: {
         latitude: startLocation.latitude,
         longitude: startLocation.longitude,
@@ -42,9 +52,25 @@ exports.start = async (req, res, next) => {
     });
 
     await newJourney.save();
+    console.log(`Journey started for user ${userId}: ${newJourney._id}`);
 
-    res.status(201).json({ message: 'Journey started', journeyId: newJourney._id });
+    // Send SMS to parents
+    const startMessage = `Journey started from (${startLocation.latitude}, ${startLocation.longitude}) to ${endLocation.address}`;
+    try {
+      await twilioService.sendSmsToParents(userId, startMessage);
+      await notificationService.notifyParents(userId, {
+        title: 'Journey Started',
+        message: startMessage,
+        journeyId: newJourney._id,
+      });
+      console.log(`SMS and notification sent for journey start: ${newJourney._id}`);
+    } catch (err) {
+      console.error('Error sending journey start notifications:', err);
+    }
+
+    res.status(201).json({ message: 'Journey started', journeyId: newJourney._id.toString() });
   } catch (err) {
+    console.error('Error starting journey:', err);
     next(err);
   }
 };
@@ -56,27 +82,49 @@ exports.end = async (req, res, next) => {
     Expected req.body:
     {
       userId,      // String (ObjectId)
-      journeyId    // String (ObjectId)
+      journeyId,   // String (ObjectId)
+      totalDistance, // Number (in km)
+      endLocation: { latitude, longitude, address }
     }
     */
-    const { userId, journeyId } = req.body;
+    const { userId, journeyId, totalDistance, endLocation } = req.body;
 
-    if (!userId || !journeyId) {
+    if (!userId || !journeyId || totalDistance == null || !endLocation) {
+      console.error('Missing required fields:', { userId, journeyId, totalDistance, endLocation });
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
     if (!journey) {
+      console.warn(`Active journey not found for user ${userId}, journey ${journeyId}`);
       return res.status(404).json({ message: 'Active journey not found' });
     }
 
     journey.endedAt = new Date();
     journey.status = 'completed';
+    journey.distanceTraveled = totalDistance;
+    journey.endLocation = endLocation; // Update endLocation with final position
 
     await journey.save();
+    console.log(`Journey ended for user ${userId}: ${journeyId}`);
+
+    // Send SMS to parents
+    const endMessage = `Journey ended. Total distance: ${totalDistance.toFixed(2)} km. Ended at (${endLocation.latitude}, ${endLocation.longitude})`;
+    try {
+      await twilioService.sendSmsToParents(userId, endMessage);
+      await notificationService.notifyParents(userId, {
+        title: 'Journey Ended',
+        message: endMessage,
+        journeyId,
+      });
+      console.log(`SMS and notification sent for journey end: ${journeyId}`);
+    } catch (err) {
+      console.error('Error sending journey end notifications:', err);
+    }
 
     res.status(200).json({ message: 'Journey ended successfully' });
   } catch (err) {
+    console.error('Error ending journey:', err);
     next(err);
   }
 };
@@ -96,15 +144,18 @@ exports.checkpoint = async (req, res, next) => {
     const { userId, journeyId, status, location } = req.body;
 
     if (!userId || !journeyId || !status || !location) {
+      console.error('Missing required fields:', { userId, journeyId, status, location });
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     if (!['safe', 'unsafe', 'no_response'].includes(status)) {
+      console.error('Invalid status value:', status);
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
     const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
     if (!journey) {
+      console.warn(`Active journey not found for user ${userId}, journey ${journeyId}`);
       return res.status(404).json({ message: 'Active journey not found' });
     }
 
@@ -124,24 +175,26 @@ exports.checkpoint = async (req, res, next) => {
 
     // If status is unsafe or no_response, update journey status and notify parents
     if (status === 'unsafe' || status === 'no_response') {
-      journey.status = status === 'unsafe' ? 'unsafe' : 'no_response';
+      journey.status = status;
 
-      // Notify parents - assuming notificationService.notifyParents expects userId
-      await notificationService.notifyParents(userId, {
-        title: 'Safety Alert',
-        message: `User marked their journey status as ${status.toUpperCase()}`,
-        journeyId: journey._id,
-      });
-
-      // Optional: send SMS via Twilio (you can customize message)
-      // Could fetch parents phone numbers from User.relations - assuming notificationService handles this
-      await twilioService.sendSmsToParents(userId, `Alert: User status is ${status.toUpperCase()}`);
+      const message = `User marked their journey status as ${status.toUpperCase()} at (${location.latitude}, ${location.longitude})`;
+      try {
+        await twilioService.sendSmsToParents(userId, message);
+        await notificationService.notifyParents(userId, {
+          title: 'Safety Alert',
+          message,
+          journeyId,
+        });
+        console.log(`SMS and notification sent for checkpoint: ${status}, journey ${journeyId}`);
+      } catch (err) {
+        console.error('Error sending checkpoint notifications:', err);
+      }
     }
 
     await journey.save();
-
     res.status(200).json({ message: 'Checkpoint recorded successfully' });
   } catch (err) {
+    console.error('Error recording checkpoint:', err);
     next(err);
   }
 };
@@ -155,23 +208,33 @@ exports.emergency = async (req, res, next) => {
       userId,            // String (ObjectId)
       journeyId,         // String (ObjectId)
       action,            // 'sos_call' | 'voice_recording' | 'no_response'
-      audioUrl           // optional String when action is voice_recording
+      location: { latitude, longitude } // Added to match frontend
     }
     */
-    const { userId, journeyId, action, audioUrl } = req.body;
+    const { userId, journeyId, action, location } = req.body;
 
-    if (!userId || !journeyId || !action) {
+    if (!userId || !journeyId || !action || !location) {
+      console.error('Missing required fields:', { userId, journeyId, action, location });
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     if (!['sos_call', 'voice_recording', 'no_response'].includes(action)) {
+      console.error('Invalid action value:', action);
       return res.status(400).json({ message: 'Invalid action value' });
     }
 
     const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
     if (!journey) {
+      console.warn(`Active journey not found for user ${userId}, journey ${journeyId}`);
       return res.status(404).json({ message: 'Active journey not found' });
     }
+
+    // Update last known location
+    journey.lastKnownLocation = {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      updatedAt: new Date(),
+    };
 
     // Create EmergencyAction record
     const emergency = new EmergencyAction({
@@ -179,35 +242,37 @@ exports.emergency = async (req, res, next) => {
       userId,
       timestamp: new Date(),
       action,
-      audioUrl: audioUrl || '',
-      notifiedParents: [], // Will fill after notifications
+      audioUrl: req.body.audioUrl || '',
+      notifiedParents: [],
     });
 
     // Notify parents
-    await notificationService.notifyParents(userId, {
-      title: 'Emergency Alert',
-      message: `User triggered an emergency: ${action.replace('_', ' ')}`,
-      journeyId,
-      audioUrl,
-    });
-
-    // Send SMS / Call parents
-    if (action === 'sos_call') {
-      await twilioService.sendSmsToParents(userId, 'Emergency SOS alert triggered!');
-      await twilioService.makeCallToParents(userId);
-    } else if (action === 'voice_recording' && audioUrl) {
-      await twilioService.sendSmsToParents(userId, `Emergency voice recording available.`);
+    const message = `Emergency ${action.replace('_', ' ')} triggered at (${location.latitude}, ${location.longitude})`;
+    try {
+      await twilioService.sendSmsToParents(userId, message);
+      if (action === 'sos_call') {
+        await twilioService.makeCallToParents(userId);
+        console.log(`SOS call initiated for user ${userId}, journey ${journeyId}`);
+      }
+      await notificationService.notifyParents(userId, {
+        title: 'Emergency Alert',
+        message,
+        journeyId,
+        audioUrl: req.body.audioUrl,
+      });
+      console.log(`SMS and notification sent for emergency: ${action}, journey ${journeyId}`);
+    } catch (err) {
+      console.error('Error sending emergency notifications:', err);
     }
 
-    // Mark journey as unsafe to reflect emergency
+    // Mark journey as unsafe
     journey.status = 'unsafe';
     await journey.save();
-
-    // Save emergency action record with notifiedParents updated if you track them in notificationService
     await emergency.save();
 
     res.status(200).json({ message: 'Emergency handled successfully' });
   } catch (err) {
+    console.error('Error handling emergency:', err);
     next(err);
   }
 };
@@ -215,61 +280,60 @@ exports.emergency = async (req, res, next) => {
 // Get current active journey for a user
 exports.getCurrentJourney = async (req, res, next) => {
   try {
-    /*
-    Expected req.params.userId
-    OR could be in req.query.userId or from JWT decoded token in req.user
-    For simplicity, req.params.userId
-    */
     const userId = req.params.userId || req.query.userId;
-
     if (!userId) {
+      console.error('UserId is required');
       return res.status(400).json({ message: 'UserId is required' });
     }
 
     const journey = await Journey.findOne({ userId, status: 'active' });
-
     if (!journey) {
+      console.log(`No active journey found for user ${userId}`);
       return res.status(404).json({ message: 'No active journey found for this user' });
     }
 
     res.status(200).json({ journey });
   } catch (err) {
+    console.error('Error fetching current journey:', err);
     next(err);
   }
 };
+
+// Get journey details by ID
 exports.getJourneyDetails = async (req, res, next) => {
   try {
-    /*
-    Expected req.params.journeyId
-    */
     const journeyId = req.params.journeyId;
-
     if (!journeyId) {
+      console.error('JourneyId is required');
       return res.status(400).json({ message: 'JourneyId is required' });
     }
 
     const journey = await Journey.findById(journeyId);
     if (!journey) {
+      console.warn(`Journey not found: ${journeyId}`);
       return res.status(404).json({ message: 'Journey not found' });
     }
 
     res.status(200).json({ journey });
   } catch (err) {
+    console.error('Error fetching journey details:', err);
     next(err);
   }
 };
+
 // Update user’s current live location during the journey
 exports.updateCurrentLocation = async (req, res, next) => {
   try {
     const { userId, journeyId, latitude, longitude } = req.body;
 
-    if (!userId || !journeyId || !latitude || !longitude) {
+    if (!userId || !journeyId || latitude == null || longitude == null) {
+      console.error('Missing required fields:', { userId, journeyId, latitude, longitude });
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
-
     if (!journey) {
+      console.warn(`Active journey not found for user ${userId}, journey ${journeyId}`);
       return res.status(404).json({ message: 'Active journey not found' });
     }
 
@@ -280,9 +344,10 @@ exports.updateCurrentLocation = async (req, res, next) => {
     };
 
     await journey.save();
+    console.log(`Location updated for user ${userId}, journey ${journeyId}: (${latitude}, ${longitude})`);
 
-    // Optional: Emit to socket
-    req.io?.to(`parent_${userId}`).emit('location_broadcast', {
+    // Emit to socket
+    req.io?.to(userId).emit('location_broadcast', {
       userId,
       journeyId,
       latitude,
@@ -292,6 +357,8 @@ exports.updateCurrentLocation = async (req, res, next) => {
 
     res.status(200).json({ message: 'Location updated successfully' });
   } catch (err) {
+    console.error('Error updating location:', err);
     next(err);
   }
 };
+
