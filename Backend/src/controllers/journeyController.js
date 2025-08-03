@@ -129,75 +129,6 @@ exports.end = async (req, res, next) => {
   }
 };
 
-// Record a checkpoint (Safe / Unsafe / No response)
-exports.checkpoint = async (req, res, next) => {
-  try {
-    /*
-    Expected req.body:
-    {
-      userId,        // String (ObjectId)
-      journeyId,     // String (ObjectId)
-      status,        // 'safe' | 'unsafe' | 'no_response'
-      location: { latitude, longitude }
-    }
-    */
-    const { userId, journeyId, status, location } = req.body;
-
-    if (!userId || !journeyId || !status || !location) {
-      console.error('Missing required fields:', { userId, journeyId, status, location });
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
-
-    if (!['safe', 'unsafe', 'no_response'].includes(status)) {
-      console.error('Invalid status value:', status);
-      return res.status(400).json({ message: 'Invalid status value' });
-    }
-
-    const journey = await Journey.findOne({ _id: journeyId, userId, status: 'active' });
-    if (!journey) {
-      console.warn(`Active journey not found for user ${userId}, journey ${journeyId}`);
-      return res.status(404).json({ message: 'Active journey not found' });
-    }
-
-    const checkpoint = {
-      timestamp: new Date(),
-      status,
-      location,
-    };
-    journey.checkpoints.push(checkpoint);
-
-    // Update last known location
-    journey.lastKnownLocation = {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      updatedAt: new Date(),
-    };
-
-    // If status is unsafe or no_response, update journey status and notify parents
-    if (status === 'unsafe' || status === 'no_response') {
-      journey.status = status;
-
-      const message = `User marked their journey status as ${status.toUpperCase()} at (${location.latitude}, ${location.longitude})`;
-      try {
-        await twilioService.sendSmsToParents(userId, message);
-        await notificationService.notifyParents(userId, {
-          title: 'Safety Alert',
-          message,
-          journeyId,
-        });
-        console.log(`SMS and notification sent for checkpoint: ${status}, journey ${journeyId}`);
-      } catch (err) {
-        console.error('Error sending checkpoint notifications:', err);
-      }
-    }
-
-    await journey.save();
-    res.status(200).json({ message: 'Checkpoint recorded successfully' });
-  } catch (err) {
-    console.error('Error recording checkpoint:', err);
-    next(err);
-  }
-};
 
 // Handle Emergency (e.g., SOS pressed, voice recorded)
 exports.emergency = async (req, res, next) => {
@@ -266,7 +197,7 @@ exports.emergency = async (req, res, next) => {
     }
 
     // Mark journey as unsafe
-    journey.status = 'unsafe';
+    journey.status = 'active';
     await journey.save();
     await emergency.save();
 
