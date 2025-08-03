@@ -7,7 +7,7 @@ const path = require('path');
 const { uploadAudio } = require('../controllers/create/uploadAudio');
 router.post('/start', journeyController.start);
 router.post('/end', journeyController.end);
-router.post('/checkpoint', journeyController.checkpoint);
+
 router.post('/emergency', journeyController.emergency);
 router.get('/:userId/current', journeyController.getCurrentJourney);
 
