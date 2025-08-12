@@ -1,109 +1,92 @@
-const User = require('../models/User');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const redis = require('../services/redisClient');
+const { sendSms } = require('../services/twilioService');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
-const SALT_ROUNDS = 10;
+function signToken(user) {
+  return jwt.sign({ id: user._id, phone: user.phone, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+}
 
-exports.register = async (req, res, next) => {
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
+}
+
+exports.register = async (req, res) => {
   try {
-    const { name, phone, email, password, role } = req.body;
+    const { name, phone, password, role } = req.body;
+    const exists = await User.findOne({ phone });
+    if (exists) return res.status(400).json({ message: 'Phone already registered' });
 
-    if (!name || !phone || !email || !password || !role) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existingUser) {
-      return res.status(409).json({ message: 'User with given email or phone already exists' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-    const newUser = new User({ name, phone, email, password: hashedPassword, role });
-    await newUser.save();
-
-    // Generate JWT token for immediate login after registration
-    const payload = {
-      userId: newUser._id,
-      role: newUser.role,
-      name: newUser.name,
-    };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
-
-    res.status(201).json({
-      message: 'User registered successfully',
-      token,
-      user: {
-        id: newUser._id,
-        name: newUser.name,
-        phone: newUser.phone,
-        email: newUser.email,
-        role: newUser.role,
-      },
-    });
+    const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
+    const user = await User.create({ name, phone, passwordHash, role: role || 'user' });
+    const token = signToken(user);
+    res.json({ user, token });
   } catch (err) {
-    next(err);
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
-exports.login = async (req, res, next) => {
+exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { phone, password } = req.body;
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(400).json({ message: 'No user found' });
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+    if (password) {
+      const ok = await bcrypt.compare(password, user.passwordHash || '');
+      if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const payload = {
-      userId: user._id,
-      role: user.role,
-      name: user.name,
-    };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
-
-    res.status(200).json({
-      message: 'User logged in successfully',
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        role: user.role,
-      },
-    });
+    const token = signToken(user);
+    res.json({ user, token });
   } catch (err) {
-    next(err);
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
-exports.getUserByToken = async (req, res, next) => {
+exports.sendOtp = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select('-password'); // Exclude password
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ message: 'Phone required' });
+
+    const otp = generateOtp();
+    await redis.set(`otp:${phone}`, otp, 'EX', 300); // 5 minutes
+
+    try {
+      await sendSms(phone, `Your verification code is ${otp}`);
+    } catch (err) {
+      console.warn('Twilio send failed', err.message);
+      // OTP still set in Redis for test/dev
     }
 
-    res.status(200).json({
-      user: {
-        id: user._id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        role: user.role,
-      },
-    });
+    res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
-    next(err);
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.verifyOtp = async (req, res) => {
+  try {
+    const { phone, code } = req.body;
+    if (!phone || !code) return res.status(400).json({ message: 'Phone and code required' });
+
+    const stored = await redis.get(`otp:${phone}`);
+    if (!stored) return res.status(400).json({ message: 'OTP expired or not found' });
+    if (stored !== code) return res.status(400).json({ message: 'Invalid OTP' });
+
+    await redis.del(`otp:${phone}`);
+
+    let user = await User.findOne({ phone });
+    if (!user) user = await User.create({ phone, role: 'user', name: '' });
+
+    const token = signToken(user);
+    res.json({ user, token });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
   }
 };
