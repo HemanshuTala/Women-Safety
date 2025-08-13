@@ -1,15 +1,21 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const redis = require('../services/redisClient');
 const { sendSms } = require('../services/twilioService');
 
+// In-memory OTP store
+const otpStore = new Map(); // key: phone, value: { code, expiresAt }
+
 function signToken(user) {
-  return jwt.sign({ id: user._id, phone: user.phone, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+  return jwt.sign(
+    { id: user._id, phone: user.phone, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  );
 }
 
 function generateOtp() {
-  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
+  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 exports.register = async (req, res) => {
@@ -53,13 +59,14 @@ exports.sendOtp = async (req, res) => {
     if (!phone) return res.status(400).json({ message: 'Phone required' });
 
     const otp = generateOtp();
-    await redis.set(`otp:${phone}`, otp, 'EX', 300); // 5 minutes
+    console.log(`Generated OTP for ${phone}: ${otp}`);
+
+    otpStore.set(phone, { code: otp, expiresAt: Date.now() + 5 * 60 * 1000 }); // 5 mins expiry
 
     try {
       await sendSms(phone, `Your verification code is ${otp}`);
     } catch (err) {
       console.warn('Twilio send failed', err.message);
-      // OTP still set in Redis for test/dev
     }
 
     res.json({ success: true, message: 'OTP sent' });
@@ -74,11 +81,17 @@ exports.verifyOtp = async (req, res) => {
     const { phone, code } = req.body;
     if (!phone || !code) return res.status(400).json({ message: 'Phone and code required' });
 
-    const stored = await redis.get(`otp:${phone}`);
-    if (!stored) return res.status(400).json({ message: 'OTP expired or not found' });
-    if (stored !== code) return res.status(400).json({ message: 'Invalid OTP' });
+    const entry = otpStore.get(phone);
+    if (!entry) return res.status(400).json({ message: 'OTP expired or not found' });
 
-    await redis.del(`otp:${phone}`);
+    if (entry.expiresAt < Date.now()) {
+      otpStore.delete(phone);
+      return res.status(400).json({ message: 'OTP expired' });
+    }
+
+    if (entry.code !== code) return res.status(400).json({ message: 'Invalid OTP' });
+
+    otpStore.delete(phone);
 
     let user = await User.findOne({ phone });
     if (!user) user = await User.create({ phone, role: 'user', name: '' });
