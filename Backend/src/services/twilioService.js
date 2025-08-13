@@ -9,6 +9,15 @@ async function sendSms(to, body) {
   });
 }
 
+async function callParent(to, message) {
+  return client.calls.create({
+    twiml: `<Response><Say>${message}</Say></Response>`,
+    to,
+    from: process.env.TWILIO_PHONE_NUMBER
+  });
+}
+
 module.exports = {
-  sendSms
+  sendSms,
+  callParent
 };

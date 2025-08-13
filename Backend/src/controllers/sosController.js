@@ -1,8 +1,9 @@
 const SOS = require('../models/SOS');
 const { emitSOS } = require('../services/socketService');
-const { sendSms } = require('../services/twilioService');
+const { sendSms, callParent } = require('../services/twilioService');
 const path = require('path');
 const User = require('../models/User');
+
 exports.sendSos = async (req, res) => {
   try {
     const user = req.user;
@@ -10,14 +11,13 @@ exports.sendSos = async (req, res) => {
     let audioUrl = req.body.audioUrl || '';
 
     if (req.file) {
-      // Build a public URL for the uploaded file
-      // e.g. http://your-server-host/uploads/audios/<filename>
       const filename = path.basename(req.file.path);
       const host = `${req.protocol}://${req.get('host')}`;
       audioUrl = `${host}/uploads/audios/${filename}`;
     }
 
-    if (!lat || !lng) return res.status(400).json({ message: 'lat and lng are required' });
+    if (!lat || !lng)
+      return res.status(400).json({ message: 'lat and lng are required' });
 
     const coords = [parseFloat(lng), parseFloat(lat)];
 
@@ -42,12 +42,13 @@ exports.sendSos = async (req, res) => {
 
     for (const p of parents) {
       if (p.phone) {
-        const body = `SOS from ${user.name || user.phone}. Msg: ${message || 'No message'}. Location: https://www.google.com/maps?q=${lat},${lng}`;
+        const body = `🚨 SOS from ${user.name || user.phone}. Location: https://www.google.com/maps?q=${lat},${lng}`;
         try {
           await sendSms(p.phone, body);
+          await callParent(p.phone, body); // NEW — make phone call
           sos.notifiedParents.push(p._id);
         } catch (err) {
-          console.warn('Failed to send SMS to parent', p.phone, err.message);
+          console.warn('Failed to contact parent', p.phone, err.message);
         }
       }
     }
@@ -60,6 +61,7 @@ exports.sendSos = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
 
 exports.getSos = async (req, res) => {
   try {
