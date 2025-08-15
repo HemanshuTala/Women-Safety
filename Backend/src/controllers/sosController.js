@@ -8,7 +8,7 @@ exports.sendSos = async (req, res) => {
   try {
     console.log('📥 SOS request received:', req.body);
     console.log('👤 User:', req.user?.name || req.user?.phone);
-    
+
     const user = req.user;
     let { lat, lng, message } = req.body;
     let audioUrl = req.body.audioUrl || '';
@@ -29,7 +29,7 @@ exports.sendSos = async (req, res) => {
 
     const coords = [parseFloat(lng), parseFloat(lat)];
     const locationUrl = `https://www.google.com/maps?q=${lat},${lng}`;
-    
+
     console.log('📍 SOS Location:', { lat, lng, coords });
 
     // Create SOS record
@@ -39,7 +39,7 @@ exports.sendSos = async (req, res) => {
       message: message || '',
       audioUrl: audioUrl || ''
     });
-    
+
     console.log('✅ SOS record created:', sos._id);
 
     // Find parents
@@ -67,23 +67,23 @@ exports.sendSos = async (req, res) => {
     for (const p of parents) {
       if (p.phone) {
         console.log(`📱 Notifying parent: ${p.phone}`);
-        
+
         const smsBody = `🚨 EMERGENCY SOS from ${user.name || user.phone}!\n\nMessage: ${message || 'Emergency assistance needed'}\n\nLocation: ${locationUrl}\n\nTime: ${new Date().toLocaleString()}\n\nPlease respond immediately!`;
-        
+
         const callMessage = `Emergency SOS alert from ${user.name || 'your child'}. They need immediate assistance. Please check your messages for location details and respond immediately.`;
-        
+
         try {
           // Only send notifications if Twilio is configured
           if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
             await sendSms(p.phone, smsBody);
             console.log(`✅ SMS sent to parent: ${p.phone}`);
-            
+
             await callParent(p.phone, callMessage);
             console.log(`📞 Call initiated to parent: ${p.phone}`);
           } else {
             console.log('⚠️ Twilio not configured, skipping SMS/call');
           }
-          
+
           sos.notifiedParents.push(p._id);
         } catch (err) {
           console.error(`❌ Failed to contact parent ${p.phone}:`, err.message);
@@ -91,7 +91,7 @@ exports.sendSos = async (req, res) => {
         }
       }
     }
-    
+
     // Notify emergency services if configured
     const emergencyNumber = process.env.EMERGENCY_CONTACT_NUMBER;
     if (emergencyNumber && process.env.TWILIO_ACCOUNT_SID) {
@@ -108,8 +108,8 @@ exports.sendSos = async (req, res) => {
     await sos.save();
     console.log('💾 SOS record saved with notifications');
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       sos: {
         _id: sos._id,
         message: sos.message,
@@ -119,11 +119,11 @@ exports.sendSos = async (req, res) => {
         notifiedParents: sos.notifiedParents.length
       }
     });
-    
+
   } catch (err) {
     console.error('💥 SOS Controller Error:', err);
-    res.status(500).json({ 
-      message: 'Server error', 
+    res.status(500).json({
+      message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
     });
   }
