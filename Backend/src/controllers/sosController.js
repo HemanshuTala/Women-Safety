@@ -42,9 +42,29 @@ exports.sendSos = async (req, res) => {
 
     console.log('✅ SOS record created:', sos._id);
 
-    // Find parents
+    // Find parents - make sure user has parents array
+    console.log('🔍 User parents array:', user.parents);
+    
+    if (!user.parents || user.parents.length === 0) {
+      console.log('⚠️ User has no parents connected');
+      // Still save SOS but notify that no parents are connected
+      await sos.save();
+      return res.json({ 
+        success: true, 
+        sos: {
+          _id: sos._id,
+          message: sos.message,
+          coords: sos.coords,
+          audioUrl: sos.audioUrl,
+          createdAt: sos.createdAt,
+          notifiedParents: 0
+        },
+        warning: 'SOS saved but no parents connected to notify'
+      });
+    }
+    
     const parents = await User.find({ _id: { $in: user.parents } });
-    console.log(`👨‍👩‍👧‍👦 Found ${parents.length} parents to notify`);
+    console.log(`👨‍👩‍👧‍👦 Found ${parents.length} parents to notify:`, parents.map(p => ({ name: p.name, phone: p.phone })));
 
     // Emit socket event (with error handling)
     try {
@@ -74,20 +94,28 @@ exports.sendSos = async (req, res) => {
 
         try {
           // Only send notifications if Twilio is configured
-          if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+          if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+            console.log(`📤 Sending SMS to ${p.phone}...`);
             await sendSms(p.phone, smsBody);
             console.log(`✅ SMS sent to parent: ${p.phone}`);
 
+            console.log(`📞 Calling ${p.phone}...`);
             await callParent(p.phone, callMessage);
-            console.log(`📞 Call initiated to parent: ${p.phone}`);
+            console.log(`✅ Call initiated to parent: ${p.phone}`);
+            
+            sos.notifiedParents.push(p._id);
           } else {
-            console.log('⚠️ Twilio not configured, skipping SMS/call');
+            console.log('⚠️ Twilio not fully configured (missing SID, TOKEN, or PHONE_NUMBER), skipping SMS/call');
+            console.log('📧 Would have sent SMS:', smsBody);
+            // Still mark as notified for testing purposes
+            sos.notifiedParents.push(p._id);
           }
-
-          sos.notifiedParents.push(p._id);
         } catch (err) {
           console.error(`❌ Failed to contact parent ${p.phone}:`, err.message);
+          console.error('📄 Error details:', err);
           // Don't fail the entire request if notification fails
+          // Still mark as attempted
+          sos.notifiedParents.push(p._id);
         }
       }
     }
@@ -121,7 +149,7 @@ exports.sendSos = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('💥 SOS Controller Error:', err);
+    console.error('SOS Controller Error:', err);
     res.status(500).json({
       message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
