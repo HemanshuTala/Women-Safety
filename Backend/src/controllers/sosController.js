@@ -44,13 +44,13 @@ exports.sendSos = async (req, res) => {
 
     // Find parents - make sure user has parents array
     console.log('🔍 User parents array:', user.parents);
-    
+
     if (!user.parents || user.parents.length === 0) {
       console.log('⚠️ User has no parents connected');
       // Still save SOS but notify that no parents are connected
       await sos.save();
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         sos: {
           _id: sos._id,
           message: sos.message,
@@ -62,7 +62,7 @@ exports.sendSos = async (req, res) => {
         warning: 'SOS saved but no parents connected to notify'
       });
     }
-    
+
     const parents = await User.find({ _id: { $in: user.parents } });
     console.log(`👨‍👩‍👧‍👦 Found ${parents.length} parents to notify:`, parents.map(p => ({ name: p.name, phone: p.phone })));
 
@@ -102,7 +102,7 @@ exports.sendSos = async (req, res) => {
             console.log(`📞 Calling ${p.phone}...`);
             await callParent(p.phone, callMessage);
             console.log(`✅ Call initiated to parent: ${p.phone}`);
-            
+
             sos.notifiedParents.push(p._id);
           } else {
             console.log('⚠️ Twilio not fully configured (missing SID, TOKEN, or PHONE_NUMBER), skipping SMS/call');
@@ -124,7 +124,7 @@ exports.sendSos = async (req, res) => {
     const emergencyNumber = process.env.EMERGENCY_CONTACT_NUMBER;
     if (emergencyNumber && process.env.TWILIO_ACCOUNT_SID) {
       try {
-        const emergencyMessage = `🚨 SOS Alert - ${user.name || user.phone} needs emergency assistance at location: ${locationUrl}. Message: ${message || 'Emergency'}`;
+        const emergencyMessage = `🚨 SOS: ${user.name || user.phone} needs help. Location: ${locationUrl}`;
         await sendSms(emergencyNumber, emergencyMessage);
         console.log(`🚨 Emergency services notified: ${emergencyNumber}`);
       } catch (err) {
