@@ -88,9 +88,9 @@ exports.sendSos = async (req, res) => {
       if (p.phone) {
         console.log(`📱 Notifying parent: ${p.phone}`);
 
-        const smsBody = `🚨 EMERGENCY SOS from ${user.name || user.phone}!\n\nMessage: ${message || 'Emergency assistance needed'}\n\n📍 LOCATION: ${locationUrl}\n\nTime: ${new Date().toLocaleString()}\n\n⚠️ URGENT: Please respond immediately!`;
+        const smsBody = `🚨 SOS from ${user.name || user.phone}! ${message || 'Help needed'} Location: ${locationUrl}`;
 
-        const callMessage = `Emergency SOS alert from ${user.name || 'your child'}. They need immediate assistance at location: latitude ${lat}, longitude ${lng}. Please check your messages for the exact location link and respond immediately.`;
+        const callMessage = `SOS alert from ${user.name || 'your child'}. Emergency assistance needed. Check SMS for location.`;
 
         try {
           // Only send notifications if Twilio is configured
