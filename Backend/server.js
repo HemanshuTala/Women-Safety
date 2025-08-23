@@ -7,6 +7,7 @@ const authRoutes = require('./src/routes/authRoutes');
 const userRoutes = require('./src/routes/userRoutes');
 const locationRoutes = require('./src/routes/locationRoutes');
 const sosRoutes = require('./src/routes/sosRoutes');
+const journeyRoutes = require('./src/routes/journeyRoutes');
 const { initSocket } = require('./src/services/socketService');
 const path = require('path');
 const fs = require('fs');
@@ -37,6 +38,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/sos', sosRoutes);
+app.use('/api/journey', journeyRoutes);
 
 // Additional socket handlers: location updates directly via socket
 io.on('connection', (socket) => {
